@@ -1,60 +1,109 @@
 import streamlit as st
 import pandas as pd
+import io
 
 # Configuração da página
 st.set_page_config(page_title="Comparativo de Tempos DOJO", layout="wide")
 
 st.title("📈 Dashboard Comparativo - Tempos DOJO")
-st.markdown("Faça o upload do arquivo de dados para gerar os gráficos de linha comparativos.")
+st.markdown("Faça o upload do arquivo de dados para gerar gráficos e adicionar novos registros.")
 
-# Componente para upload de arquivo
+# Upload de arquivo
 uploaded_file = st.file_uploader("Envie a planilha (CSV ou Excel)", type=['csv', 'xlsx'])
 
 if uploaded_file is not None:
-    # Lendo o arquivo (suporta tanto CSV quanto Excel)
-    try:
-        if uploaded_file.name.endswith('.csv'):
-            # Ignorando linhas vazias no início se houver
-            df = pd.read_csv(uploaded_file, skip_blank_lines=True) 
-        else:
-            df = pd.read_excel(uploaded_file)
+    # Lendo o arquivo e guardando na memória
+    if 'dados' not in st.session_state:
+        try:
+            if uploaded_file.name.endswith('.csv'):
+                df = pd.read_csv(uploaded_file, skip_blank_lines=True) 
+            else:
+                df = pd.read_excel(uploaded_file)
             
-        # Limpar espaços em branco nos nomes das colunas
-        df.columns = df.columns.str.strip()
+            df.columns = df.columns.str.strip()
+            st.session_state['dados'] = df
+            
+        except Exception as e:
+            st.error(f"Erro ao ler o arquivo: {e}")
+
+    if 'dados' in st.session_state:
+        df_atual = st.session_state['dados']
         
         st.success("Arquivo carregado com sucesso!")
         
-        # Verifica se existe a coluna 'Nome'
-        if 'Nome' in df.columns:
-            # Lista de pessoas
-            lista_pessoas = df['Nome'].dropna().unique()
+        # Procura a coluna 'Nome' ignorando se está maiúsculo ou minúsculo
+        colunas_upper = [str(c).upper() for c in df_atual.columns]
+        
+        if 'NOME' in colunas_upper:
+            # Encontra qual é o nome exato da coluna na planilha original
+            nome_coluna_real = df_atual.columns[colunas_upper.index('NOME')]
             
-            # Filtro interativo para o usuário escolher quem quer comparar
+            # --- SEÇÃO DE GRÁFICOS ---
+            st.markdown("---")
+            st.subheader("📊 Análise de Desempenho")
+            
+            lista_pessoas = df_atual[nome_coluna_real].dropna().unique()
             pessoas_selecionadas = st.multiselect(
-                "Selecione as pessoas para comparar as amostras:",
+                "Selecione as pessoas para comparar:",
                 options=lista_pessoas,
-                default=lista_pessoas[:3] # Seleciona os 3 primeiros por padrão
+                default=lista_pessoas[:3] if len(lista_pessoas) >= 3 else lista_pessoas
             )
             
+            colunas_amostras = [col for col in df_atual.columns if 'AMOSTRA' in str(col).upper()]
+            
             if pessoas_selecionadas:
-                # Filtrar o DataFrame
-                df_filtrado = df[df['Nome'].isin(pessoas_selecionadas)]
-                
-                # Pegar apenas as colunas de amostras (ignorando 'MÉDIA', etc)
-                colunas_amostras = [col for col in df.columns if 'AMOSTRA' in str(col).upper()]
-                
-                # Reorganizar os dados para o gráfico de linha do Streamlit
-                # O índice vira as amostras, e as colunas viram os nomes das pessoas
-                df_grafico = df_filtrado[['Nome'] + colunas_amostras].set_index('Nome').T
-                
-                st.subheader("Gráfico Comparativo de Desempenho")
-                # Gráfico de linha nativo do Streamlit (X = Amostras, Y = Tempos, Linhas = Pessoas)
+                df_filtrado = df_atual[df_atual[nome_coluna_real].isin(pessoas_selecionadas)]
+                df_grafico = df_filtrado[[nome_coluna_real] + colunas_amostras].set_index(nome_coluna_real).T
                 st.line_chart(df_grafico)
-                
-                st.subheader("Tabela de Dados Filtrada")
-                st.dataframe(df_filtrado[['Nome'] + colunas_amostras + (['MÉDIA'] if 'MÉDIA' in df.columns else [])])
             else:
-                st.warning("Por favor, selecione pelo menos uma pessoa para gerar o gráfico.")
+                st.warning("Selecione pelo menos uma pessoa para gerar o gráfico.")
+
+            # --- SEÇÃO PARA INSERIR NOVOS DADOS ---
+            st.markdown("---")
+            st.subheader("➕ Adicionar Novo Avaliado")
+            
+            with st.form("form_novos_dados", clear_on_submit=True):
+                novo_nome = st.text_input("Nome completo do avaliado:")
                 
-    except Exception as e:
-        st.error(f"Ocorreu um erro ao processar o arquivo: {e}")
+                st.write("Insira os tempos (use ponto para decimais, ex: 12.5):")
+                cols = st.columns(5) 
+                
+                novos_valores = {}
+                for i, col_name in enumerate(colunas_amostras):
+                    with cols[i % 5]:
+                        novos_valores[col_name] = st.number_input(col_name, min_value=0.0, step=0.1)
+                
+                enviou = st.form_submit_button("Salvar Novos Dados")
+                
+                if enviou:
+                    if novo_nome == "":
+                        st.error("Por favor, preencha o Nome!")
+                    else:
+                        nova_linha = {nome_coluna_real: novo_nome}
+                        nova_linha.update(novos_valores)
+                        df_nova_linha = pd.DataFrame([nova_linha])
+                        
+                        st.session_state['dados'] = pd.concat([df_atual, df_nova_linha], ignore_index=True)
+                        st.success(f"Dados de {novo_nome} adicionados com sucesso! Atualize a página para ver no gráfico.")
+                        st.rerun()
+
+            # --- VISUALIZAÇÃO E DOWNLOAD ---
+            st.markdown("---")
+            st.subheader("📁 Tabela Completa Atualizada")
+            st.dataframe(st.session_state['dados'])
+            
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                st.session_state['dados'].to_excel(writer, index=False, sheet_name='Tempos Atualizados')
+            
+            st.download_button(
+                label="📥 Baixar Planilha Atualizada (Excel)",
+                data=buffer.getvalue(),
+                file_name="Tempos_DOJO_Atualizado.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            # SE NÃO ACHAR A COLUNA NOME, MOSTRA ESTE ERRO
+            st.error("⚠️ Não encontrei a coluna com os nomes das pessoas.")
+            st.warning(f"O aplicativo leu as seguintes colunas na sua planilha: {list(df_atual.columns)}")
+            st.info("Dica: Verifique se o cabeçalho (Nome, Amostras) está exatamente na primeira linha do Excel, sem títulos acima dele.")
