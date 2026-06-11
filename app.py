@@ -20,7 +20,22 @@ if uploaded_file is not None:
             else:
                 df = pd.read_excel(uploaded_file)
             
-            df.columns = df.columns.str.strip()
+            # --- CAÇADOR DE CABEÇALHO ---
+            # Se as colunas estiverem sem nome (Unnamed), procuramos onde está o cabeçalho real
+            if any("Unnamed" in str(col) for col in df.columns):
+                for i, row in df.head(15).iterrows(): # Olha as primeiras 15 linhas
+                    valores_linha = [str(val).strip().upper() for val in row.values]
+                    if 'NOME' in valores_linha:
+                        # Achou a linha com o nome! Define ela como as colunas do arquivo
+                        df.columns = row.values
+                        # Corta o arquivo para começar só a partir dessa linha
+                        df = df.iloc[i+1:].reset_index(drop=True)
+                        break
+            
+            # Limpa o nome das colunas e remove linhas 100% vazias
+            df.columns = df.columns.astype(str).str.strip()
+            df = df.dropna(how='all', axis=1).dropna(how='all', axis=0)
+            
             st.session_state['dados'] = df
             
         except Exception as e:
@@ -29,7 +44,7 @@ if uploaded_file is not None:
     if 'dados' in st.session_state:
         df_atual = st.session_state['dados']
         
-        st.success("Arquivo carregado com sucesso!")
+        st.success("Arquivo carregado e cabeçalhos localizados com sucesso!")
         
         # Procura a coluna 'Nome' ignorando se está maiúsculo ou minúsculo
         colunas_upper = [str(c).upper() for c in df_atual.columns]
@@ -53,6 +68,10 @@ if uploaded_file is not None:
             
             if pessoas_selecionadas:
                 df_filtrado = df_atual[df_atual[nome_coluna_real].isin(pessoas_selecionadas)]
+                # Converte os tempos para número caso o Excel tenha mandado como texto
+                for col in colunas_amostras:
+                    df_filtrado[col] = pd.to_numeric(df_filtrado[col], errors='coerce')
+                
                 df_grafico = df_filtrado[[nome_coluna_real] + colunas_amostras].set_index(nome_coluna_real).T
                 st.line_chart(df_grafico)
             else:
@@ -103,7 +122,4 @@ if uploaded_file is not None:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         else:
-            # SE NÃO ACHAR A COLUNA NOME, MOSTRA ESTE ERRO
-            st.error("⚠️ Não encontrei a coluna com os nomes das pessoas.")
-            st.warning(f"O aplicativo leu as seguintes colunas na sua planilha: {list(df_atual.columns)}")
-            st.info("Dica: Verifique se o cabeçalho (Nome, Amostras) está exatamente na primeira linha do Excel, sem títulos acima dele.")
+            st.error("Ainda não encontrei a coluna 'Nome'. Tem certeza que ela existe nessa planilha?")
